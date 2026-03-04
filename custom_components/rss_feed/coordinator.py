@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import timedelta
+from functools import partial
 from typing import Any
 
 import feedparser
@@ -29,6 +30,57 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _parse_feed_sync(content: bytes) -> Any:
+    """Parse RSS feed synchronously – runs in executor thread."""
+    return feedparser.parse(content)
+
+
+def _extract_entries(feed: Any, max_entries: int) -> tuple[str, list[dict]]:
+    """Extract title and entries from a parsed feed object (runs in executor)."""
+    feed_title = feed.feed.get("title", "")
+    entries = []
+
+    for entry in feed.entries[:max_entries]:
+        # Image extraction from various feed formats
+        image_url = None
+        if hasattr(entry, "media_thumbnail") and entry.media_thumbnail:
+            image_url = entry.media_thumbnail[0].get("url")
+        elif hasattr(entry, "media_content") and entry.media_content:
+            for media in entry.media_content:
+                if media.get("type", "").startswith("image"):
+                    image_url = media.get("url")
+                    break
+        elif hasattr(entry, "enclosures") and entry.enclosures:
+            for enc in entry.enclosures:
+                if enc.get("type", "").startswith("image"):
+                    image_url = enc.get("url") or enc.get("href")
+                    break
+
+        # Strip HTML from summary
+        summary = entry.get("summary", entry.get("description", ""))
+        summary = re.sub(r"<[^>]+>", "", summary).strip()
+        if len(summary) > 300:
+            summary = summary[:300] + "..."
+
+        published = ""
+        if hasattr(entry, "published"):
+            published = entry.published
+        elif hasattr(entry, "updated"):
+            published = entry.updated
+
+        entries.append(
+            {
+                ATTR_ENTRY_TITLE:     entry.get("title", "Kein Titel"),
+                ATTR_ENTRY_SUMMARY:   summary,
+                ATTR_ENTRY_LINK:      entry.get("link", ""),
+                ATTR_ENTRY_PUBLISHED: published,
+                ATTR_ENTRY_IMAGE:     image_url,
+            }
+        )
+
+    return feed_title, entries
+
+
 class RssFeedCoordinator(DataUpdateCoordinator):
     """Coordinator to fetch RSS feed data."""
 
@@ -46,17 +98,12 @@ class RssFeedCoordinator(DataUpdateCoordinator):
 
     @staticmethod
     def _get_scan_interval(config_entry) -> int:
-        """Read scan interval from options or data (in seconds)."""
         return int(
             config_entry.options.get(
                 CONF_SCAN_INTERVAL,
                 config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
             )
         )
-
-    def update_interval_from_config(self) -> None:
-        """Re-apply update_interval after options change."""
-        self.update_interval = timedelta(seconds=self._get_scan_interval(self.config_entry))
 
     def _get_url(self) -> str:
         return self.config_entry.options.get(
@@ -72,68 +119,41 @@ class RssFeedCoordinator(DataUpdateCoordinator):
         )
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch data from the RSS feed."""
-        url = self._get_url()
+        """Fetch and parse RSS feed without blocking the event loop."""
+        url         = self._get_url()
         max_entries = self._get_max_entries()
+        session     = async_get_clientsession(self.hass)
 
-        session = async_get_clientsession(self.hass)
-
+        # 1. Async HTTP fetch
         try:
             async with session.get(url, timeout=15) as response:
                 if response.status != 200:
-                    raise UpdateFailed(f"HTTP error {response.status} for {url}")
+                    raise UpdateFailed(f"HTTP {response.status} for {url}")
                 content = await response.read()
+        except UpdateFailed:
+            raise
         except Exception as err:
             raise UpdateFailed(f"Error fetching RSS feed: {err}") from err
 
+        # 2. Parse in executor thread (feedparser is blocking/sync)
         try:
-            feed = feedparser.parse(content)
+            feed = await self.hass.async_add_executor_job(
+                partial(_parse_feed_sync, content)
+            )
         except Exception as err:
             raise UpdateFailed(f"Error parsing RSS feed: {err}") from err
 
-        feed_title = feed.feed.get("title", url)
-        entries = []
-
-        for entry in feed.entries[:max_entries]:
-            # Extract image from various feed formats
-            image_url = None
-            if hasattr(entry, "media_thumbnail") and entry.media_thumbnail:
-                image_url = entry.media_thumbnail[0].get("url")
-            elif hasattr(entry, "media_content") and entry.media_content:
-                for media in entry.media_content:
-                    if media.get("type", "").startswith("image"):
-                        image_url = media.get("url")
-                        break
-            elif hasattr(entry, "enclosures") and entry.enclosures:
-                for enc in entry.enclosures:
-                    if enc.get("type", "").startswith("image"):
-                        image_url = enc.get("url") or enc.get("href")
-                        break
-
-            # Strip HTML from summary
-            summary = entry.get("summary", entry.get("description", ""))
-            summary = re.sub(r"<[^>]+>", "", summary).strip()
-            summary = summary[:300] + "..." if len(summary) > 300 else summary
-
-            published = ""
-            if hasattr(entry, "published"):
-                published = entry.published
-            elif hasattr(entry, "updated"):
-                published = entry.updated
-
-            entries.append(
-                {
-                    ATTR_ENTRY_TITLE: entry.get("title", "Kein Titel"),
-                    ATTR_ENTRY_SUMMARY: summary,
-                    ATTR_ENTRY_LINK: entry.get("link", ""),
-                    ATTR_ENTRY_PUBLISHED: published,
-                    ATTR_ENTRY_IMAGE: image_url,
-                }
+        # 3. Extract entries (also in executor – pure CPU work)
+        try:
+            feed_title, entries = await self.hass.async_add_executor_job(
+                partial(_extract_entries, feed, max_entries)
             )
+        except Exception as err:
+            raise UpdateFailed(f"Error extracting feed entries: {err}") from err
 
         return {
-            ATTR_FEED_TITLE: feed_title,
-            "entries": entries,
-            "entry_count": len(entries),
-            "url": url,
+            ATTR_FEED_TITLE: feed_title or url,
+            "entries":       entries,
+            "entry_count":   len(entries),
+            "url":           url,
         }
