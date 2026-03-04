@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "RSS Feed konfigurieren",
+        "description": "Füge einen RSS-Feed hinzu. Der Name wird als Bezeichner für die Sensoren verwendet.",
+        "data": {
+          "name": "Name des Feeds",
+          "url": "RSS-Feed URL",
+          "max_entries": "Maximale Anzahl Einträge"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zum RSS-Feed fehlgeschlagen. Bitte URL prüfen.",
+      "invalid_url": "Ungültige URL angegeben",
+      "unknown": "Unbekannter Fehler aufgetreten"
+    },
+    "abort": {
+      "already_configured": "Dieser Feed ist bereits konfiguriert"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "RSS Feed Optionen anpassen",
+        "data": {
+          "url": "RSS-Feed URL",
+          "max_entries": "Maximale Anzahl Einträge",
+          "scan_interval": "Aktualisierungsintervall (Sekunden)"
+        }
+      }
+    }
+  }
+}
