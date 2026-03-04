@@ -48,7 +48,7 @@ async def validate_rss_url(hass: HomeAssistant, url: str) -> dict[str, Any]:
 class RssFeedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for RSS Feed."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -109,10 +109,6 @@ class RssFeedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 class RssFeedOptionsFlow(config_entries.OptionsFlow):
     """Handle RSS Feed options."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

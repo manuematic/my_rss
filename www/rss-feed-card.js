@@ -270,7 +270,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c RSS-FEED-CARD %c v1.0.0 ",
+  "%c RSS-FEED-CARD %c v0.2.0 ",
   "color:#fff;background:#1976D2;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 3px",
   "color:#1976D2;background:#e8f0fe;font-weight:bold;padding:2px 6px;border-radius:0 3px 3px 0"
 );

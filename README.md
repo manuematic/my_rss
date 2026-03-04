@@ -1,4 +1,4 @@
-# RSS Feed Integration für Home Assistant
+# RSS Feed Integration für Home Assistant — v0.2.0
 
 Eine vollständige Home Assistant Integration zum Lesen und Anzeigen von RSS-Feeds.
 
