@@ -60,7 +60,6 @@ class RssFeedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             url = user_input[CONF_URL].strip()
             name = user_input[CONF_NAME].strip()
 
-            # Check for duplicate entries
             await self.async_set_unique_id(url)
             self._abort_if_unique_id_configured()
 
@@ -102,13 +101,21 @@ class RssFeedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
-    ) -> RssFeedOptionsFlow:
+    ) -> "RssFeedOptionsFlow":
         """Get the options flow."""
-        return RssFeedOptionsFlow(config_entry)
+        # In HA 2024.x+, OptionsFlow() takes no arguments.
+        # config_entry is injected automatically via self.config_entry property.
+        return RssFeedOptionsFlow()
 
 
 class RssFeedOptionsFlow(config_entries.OptionsFlow):
-    """Handle RSS Feed options."""
+    """Handle RSS Feed options.
+
+    Note: Do NOT define __init__ here and do NOT set self.config_entry manually.
+    Home Assistant 2024.x+ injects config_entry automatically as a property.
+    Calling RssFeedOptionsFlow(config_entry) or setting self.config_entry in
+    __init__ causes a TypeError / 500 Internal Server Error.
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

@@ -1,7 +1,7 @@
 {
   "domain": "rss_feed",
   "name": "RSS Feed",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "documentation": "https://github.com/your-repo/rss_feed",
   "dependencies": [],
   "codeowners": [],
