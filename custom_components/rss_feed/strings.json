@@ -7,7 +7,8 @@
         "data": {
           "name": "Name des Feeds",
           "url": "RSS-Feed URL",
-          "max_entries": "Maximale Anzahl Einträge"
+          "max_entries": "Maximale Anzahl Einträge",
+          "interval_minutes": "Aktualisierungsintervall (Minuten)"
         }
       }
     },
@@ -27,7 +28,7 @@
         "data": {
           "url": "RSS-Feed URL",
           "max_entries": "Maximale Anzahl Einträge",
-          "scan_interval": "Aktualisierungsintervall (Sekunden)"
+          "interval_minutes": "Aktualisierungsintervall (Minuten)"
         }
       }
     }

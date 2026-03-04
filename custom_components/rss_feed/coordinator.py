@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 from typing import Any
 
@@ -31,18 +32,10 @@ _LOGGER = logging.getLogger(__name__)
 class RssFeedCoordinator(DataUpdateCoordinator):
     """Coordinator to fetch RSS feed data."""
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        config_entry,
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, config_entry) -> None:
         """Initialize the coordinator."""
         self.config_entry = config_entry
-
-        scan_interval = config_entry.options.get(
-            CONF_SCAN_INTERVAL,
-            config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-        )
+        scan_interval = self._get_scan_interval(config_entry)
 
         super().__init__(
             hass,
@@ -50,6 +43,20 @@ class RssFeedCoordinator(DataUpdateCoordinator):
             name=DOMAIN,
             update_interval=timedelta(seconds=scan_interval),
         )
+
+    @staticmethod
+    def _get_scan_interval(config_entry) -> int:
+        """Read scan interval from options or data (in seconds)."""
+        return int(
+            config_entry.options.get(
+                CONF_SCAN_INTERVAL,
+                config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+            )
+        )
+
+    def update_interval_from_config(self) -> None:
+        """Re-apply update_interval after options change."""
+        self.update_interval = timedelta(seconds=self._get_scan_interval(self.config_entry))
 
     def _get_url(self) -> str:
         return self.config_entry.options.get(
@@ -88,7 +95,7 @@ class RssFeedCoordinator(DataUpdateCoordinator):
         entries = []
 
         for entry in feed.entries[:max_entries]:
-            # Try to get an image from various possible fields
+            # Extract image from various feed formats
             image_url = None
             if hasattr(entry, "media_thumbnail") and entry.media_thumbnail:
                 image_url = entry.media_thumbnail[0].get("url")
@@ -103,10 +110,8 @@ class RssFeedCoordinator(DataUpdateCoordinator):
                         image_url = enc.get("url") or enc.get("href")
                         break
 
-            # Extract summary and strip HTML tags simply
+            # Strip HTML from summary
             summary = entry.get("summary", entry.get("description", ""))
-            # Basic HTML stripping
-            import re
             summary = re.sub(r"<[^>]+>", "", summary).strip()
             summary = summary[:300] + "..." if len(summary) > 300 else summary
 

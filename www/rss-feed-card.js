@@ -1,33 +1,36 @@
 /**
- * RSS Feed Card für Home Assistant — v0.3.0
- * Platzieren in: /config/www/rss-feed-card.js
- * Lovelace resource: /local/rss-feed-card.js (Typ: JavaScript-Modul)
+ * RSS Feed Card für Home Assistant — v0.4.0
+ * /config/www/rss-feed-card.js  →  resource: /local/rss-feed-card.js (JavaScript-Modul)
  */
 
 class RssFeedCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._localMaxItems = null; // per-card override via slider
+    this._localMaxItems  = null;
+    this._filterText     = "";
+    this._refreshTimer   = null;
   }
 
+  // ── Config ──────────────────────────────────────────────────────
   setConfig(config) {
-    if (!config.entity) {
-      throw new Error("Bitte eine entity angeben (sensor.my_rss_feed_...)");
-    }
+    if (!config.entity) throw new Error("Bitte eine entity angeben (sensor.my_rss_feed_...)");
     this._config = {
-      title:        config.title        || null,
-      entity:       config.entity,
-      max_items:    config.max_items    || null,
-      show_summary: config.show_summary !== false,
-      show_date:    config.show_date    !== false,
-      show_image:   config.show_image   !== false,
-      show_source:  config.show_source  !== false,
-      show_slider:  config.show_slider  !== false,
-      theme:        config.theme        || "auto",
+      title:           config.title           || null,
+      entity:          config.entity,
+      max_items:       config.max_items        || null,
+      show_summary:    config.show_summary     !== false,
+      show_date:       config.show_date        !== false,
+      show_image:      config.show_image       !== false,
+      show_source:     config.show_source      !== false,
+      show_slider:     config.show_slider      !== false,
+      show_filter:     config.show_filter      !== false,
+      refresh_minutes: config.refresh_minutes  || 0,   // 0 = off
+      theme:           config.theme            || "auto",
     };
-    // Reset local override when config changes
     this._localMaxItems = null;
+    this._filterText    = "";
+    this._startRefreshTimer();
     this.render();
   }
 
@@ -36,12 +39,33 @@ class RssFeedCard extends HTMLElement {
     this.render();
   }
 
-  getCardSize() { return 3; }
+  getCardSize() { return 4; }
 
+  // ── Auto-refresh timer ──────────────────────────────────────────
+  _startRefreshTimer() {
+    if (this._refreshTimer) clearInterval(this._refreshTimer);
+    const minutes = this._config?.refresh_minutes || 0;
+    if (minutes > 0) {
+      this._refreshTimer = setInterval(() => {
+        // Ask HA to re-fetch entity state (triggers coordinator poll via service)
+        if (this._hass && this._config?.entity) {
+          this._hass.callService("homeassistant", "update_entity", {
+            entity_id: this._config.entity,
+          }).catch(() => {});
+        }
+      }, minutes * 60 * 1000);
+    }
+  }
+
+  disconnectedCallback() {
+    if (this._refreshTimer) clearInterval(this._refreshTimer);
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────
   _formatDate(dateStr) {
     if (!dateStr) return "";
     try {
-      const d = new Date(dateStr);
+      const d    = new Date(dateStr);
       if (isNaN(d)) return dateStr;
       const diff = Math.floor((new Date() - d) / 1000);
       if (diff < 60)     return "Gerade eben";
@@ -52,35 +76,47 @@ class RssFeedCard extends HTMLElement {
     } catch { return dateStr; }
   }
 
+  _matchesFilter(entry, filter) {
+    if (!filter) return true;
+    const q = filter.toLowerCase();
+    return (
+      (entry.title   || "").toLowerCase().includes(q) ||
+      (entry.summary || "").toLowerCase().includes(q)
+    );
+  }
+
+  // ── Render ──────────────────────────────────────────────────────
   render() {
     if (!this._config || !this._hass) return;
 
-    const entityId = this._config.entity;
-    const state    = this._hass.states[entityId];
-    const isDark   = this._config.theme === "dark" ||
-                     (this._config.theme === "auto" && this._hass.themes?.darkMode);
+    const state = this._hass.states[this._config.entity];
+    const isDark = this._config.theme === "dark" ||
+                   (this._config.theme === "auto" && this._hass.themes?.darkMode);
 
     if (!state) {
       this.shadowRoot.innerHTML = `
         <ha-card><div style="padding:16px;color:var(--error-color)">
-          Entity "${entityId}" nicht gefunden.
+          Entity "${this._config.entity}" nicht gefunden.
         </div></ha-card>`;
       return;
     }
 
-    const attrs      = state.attributes || {};
-    const feedTitle  = attrs.feed_title || attrs.friendly_name || "RSS Feed";
-    const entries    = attrs.entries || [];
-    const totalCount = entries.length;
+    const attrs     = state.attributes || {};
+    const feedTitle = attrs.feed_title || attrs.friendly_name || "RSS Feed";
+    const allEntries = attrs.entries || [];
 
-    // Effective max: local slider > card config > all entries
-    const configMax    = this._config.max_items || totalCount;
+    // Apply keyword filter
+    const filtered  = this._filterText
+      ? allEntries.filter(e => this._matchesFilter(e, this._filterText))
+      : allEntries;
+
+    const configMax    = this._config.max_items || allEntries.length;
     const effectiveMax = this._localMaxItems !== null ? this._localMaxItems : configMax;
-    const displayEntries = entries.slice(0, effectiveMax);
+    const displayed    = filtered.slice(0, effectiveMax);
 
     const cardTitle = this._config.title || feedTitle;
 
-    // Colors
+    // ── Theme tokens ──────────────────────────────────────────────
     const accent      = "#1976D2";
     const cardBg      = isDark ? "#1c1c1e" : "#ffffff";
     const textPrimary = isDark ? "#e0e0e0" : "#212121";
@@ -88,92 +124,121 @@ class RssFeedCard extends HTMLElement {
     const border      = isDark ? "#333"    : "#f0f0f0";
     const tagBg       = isDark ? "#2a2a2e" : "#e8f0fe";
     const hoverBg     = isDark ? "#252528" : "#f8f9ff";
-    const sliderBg    = isDark ? "#2a2a2e" : "#f0f4ff";
+    const toolbarBg   = isDark ? "#242426" : "#f5f8ff";
+    const inputBg     = isDark ? "#1c1c1e" : "#ffffff";
+    const inputBorder = isDark ? "#444"    : "#d0d7e8";
 
-    // ── Slider HTML ────────────────────────────────────────────────
+    // ── Slider ────────────────────────────────────────────────────
     const sliderHtml = this._config.show_slider ? `
-      <div id="slider-bar" style="
-        padding:8px 16px 10px;
-        background:${sliderBg};
-        border-bottom:1px solid ${border};
-        display:flex;align-items:center;gap:10px">
+      <div style="padding:8px 16px 6px;background:${toolbarBg};border-bottom:1px solid ${border};
+                  display:flex;align-items:center;gap:10px">
         <span style="font-size:0.75rem;color:${textSec};white-space:nowrap">Einträge:</span>
         <input id="max-slider" type="range"
-          min="1" max="${totalCount || 1}" value="${effectiveMax}"
-          style="flex:1;accent-color:${accent};cursor:pointer" />
-        <span id="slider-val" style="
-          font-size:0.8rem;font-weight:600;color:${accent};
-          min-width:26px;text-align:right">${effectiveMax}</span>
-      </div>` : "";
-
-    // ── Entry list ─────────────────────────────────────────────────
-    const entriesHtml = displayEntries.length === 0
-      ? `<div style="padding:20px;text-align:center;color:${textSec}">Keine Einträge verfügbar</div>`
-      : displayEntries.map((entry, index) => {
-          const title     = entry.title   || "Kein Titel";
-          const summary   = entry.summary || "";
-          const link      = entry.link    || "#";
-          const published = entry.published || "";
-          const image     = entry.image;
-          const dateStr   = this._formatDate(published);
-
-          const imageHtml = (this._config.show_image && image) ? `
-            <div style="flex-shrink:0;width:80px;height:64px;border-radius:8px;overflow:hidden;margin-left:12px">
-              <img src="${image}" style="width:100%;height:100%;object-fit:cover"
-                   onerror="this.parentElement.style.display='none'" />
-            </div>` : "";
-
-          const summaryHtml = (this._config.show_summary && summary) ? `
-            <p style="margin:4px 0 0;font-size:0.78rem;color:${textSec};line-height:1.45;
-               display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
-              ${summary}
-            </p>` : "";
-
-          const dateHtml = (this._config.show_date && dateStr) ? `
-            <span style="font-size:0.72rem;color:${textSec};margin-top:6px;display:block">
-              ${dateStr}
-            </span>` : "";
-
-          const divider = index < displayEntries.length - 1
-            ? `<div style="height:1px;background:${border}"></div>` : "";
-
-          return `
-            <a href="${link}" target="_blank" rel="noopener noreferrer"
-               style="display:block;text-decoration:none;color:inherit;padding:12px 16px;transition:background 0.15s"
-               onmouseover="this.style.background='${hoverBg}'"
-               onmouseout="this.style.background='transparent'">
-              <div style="display:flex;align-items:flex-start">
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:0.875rem;font-weight:500;color:${textPrimary};line-height:1.4;
-                       overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
-                       -webkit-line-clamp:2;-webkit-box-orient:vertical">
-                    ${title}
-                  </div>
-                  ${summaryHtml}
-                  ${dateHtml}
-                </div>
-                ${imageHtml}
-              </div>
-            </a>
-            ${divider}`;
-        }).join("");
-
-    // ── Footer ─────────────────────────────────────────────────────
-    const sourceHtml = this._config.show_source ? `
-      <div style="padding:8px 16px;border-top:1px solid ${border};display:flex;align-items:center;gap:6px">
-        <span style="font-size:0.7rem;color:${textSec}">Quelle:</span>
-        <span style="font-size:0.7rem;background:${tagBg};color:${accent};
-              padding:2px 8px;border-radius:12px;font-weight:500">${feedTitle}</span>
-        <span style="margin-left:auto;font-size:0.7rem;color:${textSec}">
-          ${displayEntries.length} / ${totalCount} Einträge
+               min="1" max="${allEntries.length || 1}" value="${effectiveMax}"
+               style="flex:1;accent-color:${accent};cursor:pointer" />
+        <span id="slider-val"
+              style="font-size:0.8rem;font-weight:600;color:${accent};min-width:26px;text-align:right">
+          ${effectiveMax}
         </span>
       </div>` : "";
 
-    // ── Full card ──────────────────────────────────────────────────
+    // ── Filter bar ────────────────────────────────────────────────
+    const filterHtml = this._config.show_filter ? `
+      <div style="padding:8px 16px 8px;background:${toolbarBg};border-bottom:1px solid ${border};
+                  display:flex;align-items:center;gap:8px">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="${textSec}" style="flex-shrink:0">
+          <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
+        </svg>
+        <input id="filter-input" type="text"
+               placeholder="Stichwort filtern…"
+               value="${this._filterText}"
+               style="flex:1;border:1px solid ${inputBorder};border-radius:6px;padding:5px 10px;
+                      font-size:0.85rem;background:${inputBg};color:${textPrimary};outline:none;
+                      transition:border-color .15s"
+               onfocus="this.style.borderColor='${accent}'"
+               onblur="this.style.borderColor='${inputBorder}'" />
+        ${this._filterText ? `
+        <button id="filter-clear"
+                style="background:none;border:none;cursor:pointer;padding:2px 4px;
+                       color:${textSec};font-size:1rem;line-height:1">✕</button>` : ""}
+      </div>` : "";
+
+    // ── Entry list ────────────────────────────────────────────────
+    let entriesHtml;
+    if (allEntries.length === 0) {
+      entriesHtml = `<div style="padding:24px;text-align:center;color:${textSec}">Keine Einträge verfügbar</div>`;
+    } else if (displayed.length === 0) {
+      entriesHtml = `<div style="padding:24px;text-align:center;color:${textSec}">
+        Kein Eintrag entspricht dem Filter „${this._escHtml(this._filterText)}"
+      </div>`;
+    } else {
+      entriesHtml = displayed.map((entry, index) => {
+        const title   = this._escHtml(entry.title   || "Kein Titel");
+        const summary = this._escHtml(entry.summary || "");
+        const link    = entry.link    || "#";
+        const dateStr = this._formatDate(entry.published || "");
+        const image   = entry.image;
+
+        const imageHtml = (this._config.show_image && image) ? `
+          <div style="flex-shrink:0;width:80px;height:64px;border-radius:8px;overflow:hidden;margin-left:12px">
+            <img src="${image}" style="width:100%;height:100%;object-fit:cover"
+                 onerror="this.parentElement.style.display='none'" />
+          </div>` : "";
+
+        const summaryHtml = (this._config.show_summary && summary) ? `
+          <p style="margin:4px 0 0;font-size:0.78rem;color:${textSec};line-height:1.45;
+             display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+            ${summary}
+          </p>` : "";
+
+        const dateHtml = (this._config.show_date && dateStr) ? `
+          <span style="font-size:0.72rem;color:${textSec};margin-top:6px;display:block">${dateStr}</span>` : "";
+
+        const divider = index < displayed.length - 1
+          ? `<div style="height:1px;background:${border}"></div>` : "";
+
+        return `
+          <a href="${link}" target="_blank" rel="noopener noreferrer"
+             style="display:block;text-decoration:none;color:inherit;padding:12px 16px;transition:background .15s"
+             onmouseover="this.style.background='${hoverBg}'"
+             onmouseout="this.style.background='transparent'">
+            <div style="display:flex;align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:0.875rem;font-weight:500;color:${textPrimary};line-height:1.4;
+                     overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
+                     -webkit-line-clamp:2;-webkit-box-orient:vertical">
+                  ${title}
+                </div>
+                ${summaryHtml}
+                ${dateHtml}
+              </div>
+              ${imageHtml}
+            </div>
+          </a>
+          ${divider}`;
+      }).join("");
+    }
+
+    // ── Footer ────────────────────────────────────────────────────
+    const refreshLabel = this._config.refresh_minutes > 0
+      ? `<span style="font-size:0.7rem;color:${textSec}">↻ alle ${this._config.refresh_minutes} Min.</span>` : "";
+
+    const footerHtml = this._config.show_source ? `
+      <div style="padding:8px 16px;border-top:1px solid ${border};
+                  display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-size:0.7rem;color:${textSec}">Quelle:</span>
+        <span style="font-size:0.7rem;background:${tagBg};color:${accent};
+              padding:2px 8px;border-radius:12px;font-weight:500">${this._escHtml(feedTitle)}</span>
+        ${refreshLabel}
+        <span style="margin-left:auto;font-size:0.7rem;color:${textSec}">
+          ${displayed.length}${this._filterText ? " gefiltert" : ""} / ${allEntries.length} Einträge
+        </span>
+      </div>` : "";
+
+    // ── Full card ─────────────────────────────────────────────────
     this.shadowRoot.innerHTML = `
       <ha-card style="background:${cardBg};border-radius:12px;overflow:hidden;
                       box-shadow:var(--ha-card-box-shadow,0 2px 8px rgba(0,0,0,.1))">
-        <!-- Header -->
         <div style="padding:14px 16px 10px;display:flex;align-items:center;gap:10px;
                     border-bottom:1px solid ${border}">
           <div style="width:32px;height:32px;border-radius:8px;background:${accent};
@@ -187,125 +252,78 @@ class RssFeedCard extends HTMLElement {
           </div>
           <div style="font-weight:600;font-size:1rem;color:${textPrimary};
                       flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            ${cardTitle}
+            ${this._escHtml(cardTitle)}
           </div>
         </div>
-        <!-- Slider -->
         ${sliderHtml}
-        <!-- Entries -->
+        ${filterHtml}
         <div id="entries-list">${entriesHtml}</div>
-        <!-- Footer -->
-        ${sourceHtml}
+        ${footerHtml}
       </ha-card>`;
 
-    // ── Slider event listener (after DOM insertion) ────────────────
-    if (this._config.show_slider) {
-      const slider = this.shadowRoot.getElementById("max-slider");
-      const valSpan = this.shadowRoot.getElementById("slider-val");
-      if (slider) {
-        slider.addEventListener("input", (e) => {
-          const val = parseInt(e.target.value);
-          valSpan.textContent = val;
-          this._localMaxItems = val;
-          // Re-render only the entries list for performance
-          this._updateEntriesList(entries, val, textPrimary, textSec, border, hoverBg);
-          // Update footer count
-          const footer = this.shadowRoot.querySelector("[data-footer-count]");
-          if (footer) footer.textContent = `${Math.min(val, totalCount)} / ${totalCount} Einträge`;
-        });
-      }
+    // ── Event listeners ───────────────────────────────────────────
+    const slider = this.shadowRoot.getElementById("max-slider");
+    if (slider) {
+      slider.addEventListener("input", (e) => {
+        this._localMaxItems = parseInt(e.target.value);
+        this.render();
+      });
+    }
+
+    const filterInput = this.shadowRoot.getElementById("filter-input");
+    if (filterInput) {
+      filterInput.addEventListener("input", (e) => {
+        this._filterText = e.target.value;
+        this.render();
+      });
+    }
+
+    const clearBtn = this.shadowRoot.getElementById("filter-clear");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        this._filterText = "";
+        this.render();
+      });
     }
   }
 
-  _updateEntriesList(entries, maxItems, textPrimary, textSec, border, hoverBg) {
-    const list = this.shadowRoot.getElementById("entries-list");
-    if (!list) return;
-    const display = entries.slice(0, maxItems);
-    if (display.length === 0) {
-      list.innerHTML = `<div style="padding:20px;text-align:center;color:${textSec}">Keine Einträge verfügbar</div>`;
-      return;
-    }
-    list.innerHTML = display.map((entry, index) => {
-      const title   = entry.title || "Kein Titel";
-      const summary = entry.summary || "";
-      const link    = entry.link || "#";
-      const dateStr = this._formatDate(entry.published || "");
-      const image   = entry.image;
-
-      const imageHtml = (this._config.show_image && image) ? `
-        <div style="flex-shrink:0;width:80px;height:64px;border-radius:8px;overflow:hidden;margin-left:12px">
-          <img src="${image}" style="width:100%;height:100%;object-fit:cover"
-               onerror="this.parentElement.style.display='none'" />
-        </div>` : "";
-
-      const summaryHtml = (this._config.show_summary && summary) ? `
-        <p style="margin:4px 0 0;font-size:0.78rem;color:${textSec};line-height:1.45;
-           display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
-          ${summary}
-        </p>` : "";
-
-      const dateHtml = (this._config.show_date && dateStr) ? `
-        <span style="font-size:0.72rem;color:${textSec};margin-top:6px;display:block">${dateStr}</span>` : "";
-
-      const divider = index < display.length - 1
-        ? `<div style="height:1px;background:${border}"></div>` : "";
-
-      return `
-        <a href="${link}" target="_blank" rel="noopener noreferrer"
-           style="display:block;text-decoration:none;color:inherit;padding:12px 16px;transition:background 0.15s"
-           onmouseover="this.style.background='${hoverBg}'"
-           onmouseout="this.style.background='transparent'">
-          <div style="display:flex;align-items:flex-start">
-            <div style="flex:1;min-width:0">
-              <div style="font-size:0.875rem;font-weight:500;color:${textPrimary};line-height:1.4;
-                   overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
-                   -webkit-line-clamp:2;-webkit-box-orient:vertical">
-                ${title}
-              </div>
-              ${summaryHtml}
-              ${dateHtml}
-            </div>
-            ${imageHtml}
-          </div>
-        </a>
-        ${divider}`;
-    }).join("");
+  _escHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
-  // ── Visual Editor ──────────────────────────────────────────────
+  // ── Visual Editor ─────────────────────────────────────────────
   static getConfigElement() {
     return document.createElement("rss-feed-card-editor");
   }
 
   static getStubConfig() {
     return {
-      entity: "sensor.my_rss_feed_mein_feed",
-      title: "",
-      show_summary: true,
-      show_date: true,
-      show_image: true,
-      show_source: true,
-      show_slider: true,
-      max_items: 5,
+      entity:          "sensor.my_rss_feed_mein_feed",
+      title:           "",
+      max_items:       5,
+      show_slider:     true,
+      show_filter:     true,
+      show_summary:    true,
+      show_date:       true,
+      show_image:      true,
+      show_source:     true,
+      refresh_minutes: 30,
     };
   }
 }
 
-// ── Visual Editor Component ────────────────────────────────────────────────
+// ── Visual Editor ──────────────────────────────────────────────────────────
 class RssFeedCardEditor extends HTMLElement {
-  setConfig(config) {
-    this._config = config;
-    this.render();
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-    if (!this._rendered) this.render();
-  }
+  setConfig(config) { this._config = config; this.render(); }
+  set hass(hass)    { this._hass = hass; if (!this._rendered) this.render(); }
 
   _fire(key, value) {
-    const newConfig = { ...this._config, [key]: value };
-    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: newConfig } }));
+    this.dispatchEvent(new CustomEvent("config-changed",
+      { detail: { config: { ...this._config, [key]: value } } }));
   }
 
   render() {
@@ -315,64 +333,72 @@ class RssFeedCardEditor extends HTMLElement {
 
     this.innerHTML = `
       <style>
-        .editor { padding:16px;display:flex;flex-direction:column;gap:12px }
-        label { font-size:0.82rem;color:var(--secondary-text-color);display:block;margin-bottom:3px }
+        .ed  { padding:16px;display:flex;flex-direction:column;gap:10px }
+        lab  { font-size:.82rem;color:var(--secondary-text-color);display:block;margin-bottom:3px }
         input[type=text], input[type=number] {
-          width:100%;box-sizing:border-box;padding:8px 10px;
+          width:100%;box-sizing:border-box;padding:7px 10px;
           border:1px solid var(--divider-color,#ccc);border-radius:6px;
-          font-size:0.9rem;background:var(--card-background-color);color:var(--primary-text-color)
+          font-size:.9rem;background:var(--card-background-color);color:var(--primary-text-color)
         }
-        .row { display:flex;align-items:center;justify-content:space-between }
-        .row span { font-size:0.875rem;color:var(--primary-text-color) }
-        .section { border-top:1px solid var(--divider-color,#eee);padding-top:10px;margin-top:2px }
-        h4 { margin:0 0 8px;font-size:0.8rem;color:var(--secondary-text-color);text-transform:uppercase;letter-spacing:.05em }
+        .row { display:flex;align-items:center;justify-content:space-between;padding:2px 0 }
+        .row span { font-size:.875rem;color:var(--primary-text-color) }
+        .sec { border-top:1px solid var(--divider-color,#eee);padding-top:10px;margin-top:4px }
+        h4   { margin:0 0 8px;font-size:.78rem;color:var(--secondary-text-color);
+               text-transform:uppercase;letter-spacing:.06em }
       </style>
-      <div class="editor">
+      <div class="ed">
         <div>
-          <label>Entity (sensor.my_rss_feed_*)</label>
-          <input type="text" id="entity" value="${c.entity || ""}" placeholder="sensor.my_rss_feed_tagesschau" />
+          <lab>Entity (sensor.my_rss_feed_*)</lab>
+          <input type="text" id="entity" value="${c.entity||""}" placeholder="sensor.my_rss_feed_tagesschau"/>
         </div>
         <div>
-          <label>Kartentitel (leer = Feed-Titel)</label>
-          <input type="text" id="title" value="${c.title || ""}" placeholder="Mein RSS Feed" />
+          <lab>Kartentitel (leer = Feed-Titel)</lab>
+          <input type="text" id="title" value="${c.title||""}" placeholder="Mein RSS Feed"/>
         </div>
         <div>
-          <label>Standard max. Einträge (leer = alle)</label>
-          <input type="number" id="max_items" value="${c.max_items || ""}" min="1" max="50" placeholder="Alle anzeigen" />
+          <lab>Standard max. Einträge (leer = alle)</lab>
+          <input type="number" id="max_items" value="${c.max_items||""}" min="1" max="50"/>
         </div>
-        <div class="section">
-          <h4>Anzeige</h4>
-          <div class="row" style="margin-bottom:8px">
-            <span>Schieberegler für Einträge anzeigen</span>
-            <input type="checkbox" id="show_slider" ${c.show_slider !== false ? "checked" : ""} />
+        <div>
+          <lab>Card auto-refresh (Minuten, 0 = aus)</lab>
+          <input type="number" id="refresh_minutes" value="${c.refresh_minutes||0}" min="0" max="1440"/>
+        </div>
+        <div class="sec">
+          <h4>Sichtbare Bedienelemente</h4>
+          <div class="row"><span>Schieberegler Einträge</span>
+            <input type="checkbox" id="show_slider"  ${c.show_slider  !==false?"checked":""}/>
           </div>
-          <div class="row" style="margin-bottom:8px">
-            <span>Zusammenfassung anzeigen</span>
-            <input type="checkbox" id="show_summary" ${c.show_summary !== false ? "checked" : ""} />
+          <div class="row"><span>Stichwort-Filterfeld</span>
+            <input type="checkbox" id="show_filter"  ${c.show_filter  !==false?"checked":""}/>
           </div>
-          <div class="row" style="margin-bottom:8px">
-            <span>Datum anzeigen</span>
-            <input type="checkbox" id="show_date" ${c.show_date !== false ? "checked" : ""} />
+        </div>
+        <div class="sec">
+          <h4>Inhaltsanzeige</h4>
+          <div class="row"><span>Zusammenfassung</span>
+            <input type="checkbox" id="show_summary" ${c.show_summary !==false?"checked":""}/>
           </div>
-          <div class="row" style="margin-bottom:8px">
-            <span>Vorschaubilder anzeigen</span>
-            <input type="checkbox" id="show_image" ${c.show_image !== false ? "checked" : ""} />
+          <div class="row"><span>Datum</span>
+            <input type="checkbox" id="show_date"    ${c.show_date    !==false?"checked":""}/>
           </div>
-          <div class="row">
-            <span>Quellen-Badge anzeigen</span>
-            <input type="checkbox" id="show_source" ${c.show_source !== false ? "checked" : ""} />
+          <div class="row"><span>Vorschaubilder</span>
+            <input type="checkbox" id="show_image"   ${c.show_image   !==false?"checked":""}/>
+          </div>
+          <div class="row"><span>Quellen-Badge</span>
+            <input type="checkbox" id="show_source"  ${c.show_source  !==false?"checked":""}/>
           </div>
         </div>
       </div>`;
 
-    this.querySelector("#entity").addEventListener("change",       (e) => this._fire("entity",       e.target.value));
-    this.querySelector("#title").addEventListener("change",        (e) => this._fire("title",        e.target.value));
-    this.querySelector("#max_items").addEventListener("change",    (e) => this._fire("max_items",    parseInt(e.target.value) || null));
-    this.querySelector("#show_slider").addEventListener("change",  (e) => this._fire("show_slider",  e.target.checked));
-    this.querySelector("#show_summary").addEventListener("change", (e) => this._fire("show_summary", e.target.checked));
-    this.querySelector("#show_date").addEventListener("change",    (e) => this._fire("show_date",    e.target.checked));
-    this.querySelector("#show_image").addEventListener("change",   (e) => this._fire("show_image",   e.target.checked));
-    this.querySelector("#show_source").addEventListener("change",  (e) => this._fire("show_source",  e.target.checked));
+    [
+      ["entity",          v => v],
+      ["title",           v => v],
+      ["max_items",       v => parseInt(v)||null],
+      ["refresh_minutes", v => parseInt(v)||0],
+    ].forEach(([id, fn]) =>
+      this.querySelector(`#${id}`).addEventListener("change", e => this._fire(id, fn(e.target.value))));
+
+    ["show_slider","show_filter","show_summary","show_date","show_image","show_source"].forEach(id =>
+      this.querySelector(`#${id}`).addEventListener("change", e => this._fire(id, e.target.checked)));
   }
 }
 
@@ -381,14 +407,14 @@ customElements.define("rss-feed-card-editor", RssFeedCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "rss-feed-card",
-  name: "RSS Feed Card",
-  description: "Zeigt Einträge eines RSS-Feed Sensors an (mit Slider)",
-  preview: true,
+  type:        "rss-feed-card",
+  name:        "RSS Feed Card",
+  description: "Zeigt RSS-Feed Einträge mit Filter, Slider und Auto-Refresh",
+  preview:     true,
 });
 
 console.info(
-  "%c RSS-FEED-CARD %c v0.3.0 ",
+  "%c RSS-FEED-CARD %c v0.4.0 ",
   "color:#fff;background:#1976D2;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 3px",
   "color:#1976D2;background:#e8f0fe;font-weight:bold;padding:2px 6px;border-radius:0 3px 3px 0"
 );

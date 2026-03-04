@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Background circle -->
+  <circle cx="50" cy="50" r="50" fill="#1976D2"/>
+  <!-- RSS signal waves -->
+  <circle cx="22" cy="78" r="9" fill="white"/>
+  <path d="M22 55 a23 23 0 0 1 23 23" fill="none" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  <path d="M22 34 a44 44 0 0 1 44 44" fill="none" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  <path d="M22 14 a64 64 0 0 1 64 64" fill="none" stroke="white" stroke-width="8" stroke-linecap="round"/>
+</svg>

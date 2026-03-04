@@ -21,12 +21,15 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MAX_MAX_ENTRIES,
-    MAX_SCAN_INTERVAL,
     MIN_MAX_ENTRIES,
-    MIN_SCAN_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# UI uses minutes, internally stored as seconds
+DEFAULT_INTERVAL_MINUTES = DEFAULT_SCAN_INTERVAL // 60  # 30
+MIN_INTERVAL_MINUTES = 5
+MAX_INTERVAL_MINUTES = 1440  # 24h
 
 
 async def validate_rss_url(hass: HomeAssistant, url: str) -> dict[str, Any]:
@@ -70,13 +73,14 @@ class RssFeedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception:
                 errors["base"] = "unknown"
             else:
+                interval_minutes = user_input["interval_minutes"]
                 return self.async_create_entry(
                     title=name,
                     data={
                         CONF_NAME: name,
                         CONF_URL: url,
                         CONF_MAX_ENTRIES: user_input[CONF_MAX_ENTRIES],
-                        CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
+                        CONF_SCAN_INTERVAL: interval_minutes * 60,
                     },
                 )
 
@@ -87,6 +91,10 @@ class RssFeedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_MAX_ENTRIES, default=DEFAULT_MAX_ENTRIES): vol.All(
                     vol.Coerce(int),
                     vol.Range(min=MIN_MAX_ENTRIES, max=MAX_MAX_ENTRIES),
+                ),
+                vol.Required("interval_minutes", default=DEFAULT_INTERVAL_MINUTES): vol.All(
+                    vol.Coerce(int),
+                    vol.Range(min=MIN_INTERVAL_MINUTES, max=MAX_INTERVAL_MINUTES),
                 ),
             }
         )
@@ -103,18 +111,16 @@ class RssFeedConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> "RssFeedOptionsFlow":
         """Get the options flow."""
-        # In HA 2024.x+, OptionsFlow() takes no arguments.
-        # config_entry is injected automatically via self.config_entry property.
+        # HA 2024.x+: OptionsFlow() must be called WITHOUT arguments.
+        # config_entry is injected automatically as self.config_entry property.
         return RssFeedOptionsFlow()
 
 
 class RssFeedOptionsFlow(config_entries.OptionsFlow):
     """Handle RSS Feed options.
 
-    Note: Do NOT define __init__ here and do NOT set self.config_entry manually.
-    Home Assistant 2024.x+ injects config_entry automatically as a property.
-    Calling RssFeedOptionsFlow(config_entry) or setting self.config_entry in
-    __init__ causes a TypeError / 500 Internal Server Error.
+    IMPORTANT: No __init__ and no self.config_entry assignment here.
+    HA 2024.x+ injects config_entry automatically after instantiation.
     """
 
     async def async_step_init(
@@ -125,7 +131,6 @@ class RssFeedOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             url = user_input[CONF_URL].strip()
-
             try:
                 await validate_rss_url(self.hass, url)
             except ValueError:
@@ -133,7 +138,15 @@ class RssFeedOptionsFlow(config_entries.OptionsFlow):
             except Exception:
                 errors["base"] = "unknown"
             else:
-                return self.async_create_entry(title="", data=user_input)
+                interval_minutes = user_input["interval_minutes"]
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        CONF_URL: url,
+                        CONF_MAX_ENTRIES: user_input[CONF_MAX_ENTRIES],
+                        CONF_SCAN_INTERVAL: interval_minutes * 60,
+                    },
+                )
 
         current_url = self.config_entry.options.get(
             CONF_URL, self.config_entry.data.get(CONF_URL, "")
@@ -141,9 +154,11 @@ class RssFeedOptionsFlow(config_entries.OptionsFlow):
         current_max = self.config_entry.options.get(
             CONF_MAX_ENTRIES, self.config_entry.data.get(CONF_MAX_ENTRIES, DEFAULT_MAX_ENTRIES)
         )
-        current_interval = self.config_entry.options.get(
-            CONF_SCAN_INTERVAL, self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        current_interval_sec = self.config_entry.options.get(
+            CONF_SCAN_INTERVAL,
+            self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         )
+        current_interval_min = max(MIN_INTERVAL_MINUTES, current_interval_sec // 60)
 
         schema = vol.Schema(
             {
@@ -152,9 +167,9 @@ class RssFeedOptionsFlow(config_entries.OptionsFlow):
                     vol.Coerce(int),
                     vol.Range(min=MIN_MAX_ENTRIES, max=MAX_MAX_ENTRIES),
                 ),
-                vol.Required(CONF_SCAN_INTERVAL, default=current_interval): vol.All(
+                vol.Required("interval_minutes", default=current_interval_min): vol.All(
                     vol.Coerce(int),
-                    vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL),
+                    vol.Range(min=MIN_INTERVAL_MINUTES, max=MAX_INTERVAL_MINUTES),
                 ),
             }
         )
