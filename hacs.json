@@ -1,0 +1,10 @@
+{
+  "name": "Mein RSS Feed",
+  "domain": "my_rss",
+  "documentation": "https://github.com/manuematic/my_rss",
+  "issue_tracker": "https://github.com/manuematic/my_rss/issues",
+  "codeowners": ["@manuematic"],
+  "requirements": [],
+  "iot_class": "cloud_polling",
+  "homeassistant": "2023.6.0"
+}

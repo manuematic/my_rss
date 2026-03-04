@@ -46,8 +46,11 @@ class RssFeedSensor(CoordinatorEntity, SensorEntity):
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._entry = entry
-        self._attr_name = name
-        self._attr_unique_id = f"{DOMAIN}_{entry.entry_id}"
+        # Sensor-Name: "my-rss-feed.<slug>" → entity_id: sensor.my_rss_feed_<slug>
+        slug = name.lower().replace(" ", "_").replace("-", "_")
+        self._attr_name = f"my-rss-feed.{name}"
+        self._attr_unique_id = f"my_rss_feed_{entry.entry_id}"
+        self._attr_entity_id = f"sensor.my_rss_feed_{slug}"
         self._attr_icon = "mdi:rss"
 
     @property
